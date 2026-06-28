@@ -1,20 +1,18 @@
 """
 Fake News Detection — Streamlit App
-Run:  streamlit run app.py
-
-Folder structure expected:
-    app.py
-    fake_news_detection.py   ← core logic lives here
-    data/
-        True.csv
-        Fake.csv
+Run: streamlit run app.py
 """
-import asyncio, sys
 
-if sys.platform == "win32":
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+import asyncio
+import sys
+import os
+import tempfile
 import time
 from pathlib import Path
+
+# Fix for Python 3.12+ on Windows
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 import pandas as pd
 import streamlit as st
@@ -22,7 +20,6 @@ from sklearn.model_selection import train_test_split
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics import accuracy_score, classification_report
 
-# ── Import core logic from the main script ────────────────────────────────────
 from fake_news_detection_model import (
     clean_text,
     load_data,
@@ -31,18 +28,17 @@ from fake_news_detection_model import (
     RANDOM_STATE,
     TEST_SIZE,
     TFIDF_MAX_FEAT,
-    TRUE_PATH,
-    FAKE_PATH,
 )
+
+# ── Always resolve CSVs relative to THIS file, regardless of where
+#    streamlit is launched from (fixes Windows working-directory issues)
+_HERE     = Path(__file__).resolve().parent
+TRUE_PATH = _HERE / "True.csv"
+FAKE_PATH = _HERE / "Fake.csv"
 
 # ── Page config ───────────────────────────────────────────────────────────────
-st.set_page_config(
-    page_title="Fake News Detector",
-    page_icon="🔍",
-    layout="wide",
-)
+st.set_page_config(page_title="Fake News Detector", page_icon="🔍", layout="wide")
 
-# ── Custom CSS ────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
     .main-title   { font-size: 2.4rem; font-weight: 700; margin-bottom: 0; }
@@ -59,42 +55,26 @@ st.markdown("""
     .conf-bar-bg  { background: #e5e7eb; border-radius: 999px;
                     height: 10px; width: 100%; margin-top: 6px; }
     .conf-bar-fill{ height: 10px; border-radius: 999px; }
-    stTextArea textarea { font-size: 0.95rem !important; }
 </style>
 """, unsafe_allow_html=True)
 
+# ── Session state ─────────────────────────────────────────────────────────────
+for key, default in {
+    "trained": False, "models": {}, "vectorizer": None,
+    "metrics": {}, "reports": {}, "data_stats": {},
+}.items():
+    if key not in st.session_state:
+        st.session_state[key] = default
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Session-state helpers
-# ─────────────────────────────────────────────────────────────────────────────
-def _state_init():
-    for key, default in {
-        "trained":    False,
-        "models":     {},
-        "vectorizer": None,
-        "metrics":    {},
-        "reports":    {},
-        "data_stats": {},
-    }.items():
-        if key not in st.session_state:
-            st.session_state[key] = default
-
-_state_init()
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Cached training pipeline
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Cached training ───────────────────────────────────────────────────────────
 @st.cache_resource(show_spinner=False)
 def run_training(true_path: str, fake_path: str, test_size: float, max_feat: int):
-    """Full pipeline: load → clean → split → vectorise → train all models."""
-    news = load_data(Path(true_path), Path(fake_path))
-    news = preprocess(news)
+    news = preprocess(load_data(Path(true_path), Path(fake_path)))
 
     data_stats = {
-        "total":  len(news),
-        "fake":   int((news.label == 0).sum()),
-        "real":   int((news.label == 1).sum()),
+        "total": len(news),
+        "fake":  int((news.label == 0).sum()),
+        "real":  int((news.label == 1).sum()),
     }
 
     X, y = news["text"], news["label"]
@@ -111,115 +91,98 @@ def run_training(true_path: str, fake_path: str, test_size: float, max_feat: int
         t0 = time.perf_counter()
         model.fit(xv_train, y_train)
         elapsed = time.perf_counter() - t0
-
         preds = model.predict(xv_test)
-        acc   = accuracy_score(y_test, preds)
-        report = classification_report(
+        fitted[name]  = model
+        metrics[name] = {"accuracy": accuracy_score(y_test, preds), "time": elapsed}
+        reports[name] = classification_report(
             y_test, preds, target_names=["Fake", "Real"], output_dict=True
         )
 
-        fitted[name]  = model
-        metrics[name] = {"accuracy": acc, "time": elapsed}
-        reports[name] = report
-
     return vectorizer, fitted, metrics, reports, data_stats
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Sidebar — Configuration
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.header("⚙️ Configuration")
 
     st.subheader("Dataset Paths")
-    true_path = st.text_input("True News CSV",  value=str(TRUE_PATH))
-    fake_path = st.text_input("Fake News CSV",  value=str(FAKE_PATH))
+    # Show the resolved absolute paths as defaults so the user can see exactly
+    # where the app is looking — and edit them if needed
+    true_path = st.text_input("True News CSV", value=str(TRUE_PATH))
+    fake_path = st.text_input("Fake News CSV", value=str(FAKE_PATH))
 
-    # Allow CSV upload as alternative
     st.markdown("**— or upload files —**")
     up_true = st.file_uploader("Upload True.csv", type="csv", key="up_true")
     up_fake = st.file_uploader("Upload Fake.csv", type="csv", key="up_fake")
 
     st.divider()
     st.subheader("Hyperparameters")
-    test_size = st.slider("Test split ratio", 0.1, 0.4, TEST_SIZE, 0.05)
+    test_size = st.slider("Test split ratio", 0.1, 0.4, float(TEST_SIZE), 0.05)
     max_feat  = st.select_slider(
         "TF-IDF max features",
         options=[10_000, 20_000, 30_000, 50_000, 80_000, 100_000],
-        value=TFIDF_MAX_FEAT,
+        value=int(TFIDF_MAX_FEAT),
     )
 
     st.divider()
     train_btn = st.button("🚀 Train Models", use_container_width=True, type="primary")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Handle uploaded files — save temporarily so load_data can read them
-# ─────────────────────────────────────────────────────────────────────────────
-import tempfile, os
-
+# Handle uploaded files — takes priority over path inputs
 _tmp_dir = tempfile.mkdtemp()
-
 if up_true:
-    tmp_true = os.path.join(_tmp_dir, "True.csv")
-    with open(tmp_true, "wb") as f:
-        f.write(up_true.read())
-    true_path = tmp_true
-
+    tmp = os.path.join(_tmp_dir, "True.csv")
+    open(tmp, "wb").write(up_true.read())
+    true_path = tmp
 if up_fake:
-    tmp_fake = os.path.join(_tmp_dir, "Fake.csv")
-    with open(tmp_fake, "wb") as f:
-        f.write(up_fake.read())
-    fake_path = tmp_fake
+    tmp = os.path.join(_tmp_dir, "Fake.csv")
+    open(tmp, "wb").write(up_fake.read())
+    fake_path = tmp
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Header
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Header ────────────────────────────────────────────────────────────────────
 st.markdown('<p class="main-title">🔍 Fake News Detector</p>', unsafe_allow_html=True)
 st.markdown(
-    '<p class="sub-title">TF-IDF + ML classifiers · Logistic Regression · '
-    'Decision Tree · Random Forest · Gradient Boosting</p>',
+    '<p class="sub-title">TF-IDF + ML · Logistic Regression · Decision Tree · '
+    'Random Forest · Gradient Boosting</p>',
     unsafe_allow_html=True,
 )
 st.divider()
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Training
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Training ──────────────────────────────────────────────────────────────────
 if train_btn:
-    if not Path(true_path).exists() or not Path(fake_path).exists():
-        st.error("❌ CSV files not found. Check the paths or upload files in the sidebar.")
+    true_p = Path(true_path)
+    fake_p = Path(fake_path)
+
+    if not true_p.exists() or not fake_p.exists():
+        st.error(
+            f"❌ CSV files not found.\n\n"
+            f"Looking for:\n- `{true_p}`\n- `{fake_p}`\n\n"
+            f"Either correct the paths in the sidebar or use the upload buttons."
+        )
         st.stop()
 
-    with st.spinner("Training models — this takes ~1–2 minutes on first run …"):
+    with st.spinner("Training models — takes ~1–2 minutes on first run …"):
         try:
             vectorizer, fitted, metrics, reports, data_stats = run_training(
-                true_path, fake_path, test_size, max_feat
+                str(true_p), str(fake_p), test_size, max_feat
             )
-            st.session_state.trained    = True
-            st.session_state.models     = fitted
-            st.session_state.vectorizer = vectorizer
-            st.session_state.metrics    = metrics
-            st.session_state.reports    = reports
-            st.session_state.data_stats = data_stats
+            st.session_state.update({
+                "trained": True, "models": fitted, "vectorizer": vectorizer,
+                "metrics": metrics, "reports": reports, "data_stats": data_stats,
+            })
             st.success("✅ All models trained successfully!")
         except Exception as e:
             st.error(f"Training failed: {e}")
             st.stop()
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Dashboard — shown once trained
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Dashboard ─────────────────────────────────────────────────────────────────
 if st.session_state.trained:
 
-    # ── Dataset stats ──────────────────────────────────────────────────────
     st.subheader("📊 Dataset Overview")
     ds = st.session_state.data_stats
     c1, c2, c3 = st.columns(3)
     for col, label, val, color in [
-        (c1, "Total Articles", f"{ds['total']:,}",  "#3b82f6"),
-        (c2, "Fake Articles",  f"{ds['fake']:,}",   "#ef4444"),
-        (c3, "Real Articles",  f"{ds['real']:,}",   "#22c55e"),
+        (c1, "Total Articles", f"{ds['total']:,}", "#3b82f6"),
+        (c2, "Fake Articles",  f"{ds['fake']:,}",  "#ef4444"),
+        (c3, "Real Articles",  f"{ds['real']:,}",  "#22c55e"),
     ]:
         col.markdown(
             f'<div class="metric-card">'
@@ -229,38 +192,30 @@ if st.session_state.trained:
         )
 
     st.divider()
-
-    # ── Model performance ──────────────────────────────────────────────────
     st.subheader("🏆 Model Performance")
-
     metrics = st.session_state.metrics
     reports = st.session_state.reports
 
-    # Accuracy comparison bar chart
     acc_df = pd.DataFrame(
-        [(name, v["accuracy"] * 100, v["time"]) for name, v in metrics.items()],
-        columns=["Model", "Accuracy (%)", "Train Time (s)"],
+        [(n, v["accuracy"] * 100) for n, v in metrics.items()],
+        columns=["Model", "Accuracy (%)"],
     ).sort_values("Accuracy (%)", ascending=False)
-
     st.bar_chart(acc_df.set_index("Model")["Accuracy (%)"], height=250)
 
-    # Per-model metrics table
     rows = []
     for name, m in metrics.items():
         r = reports[name]
         rows.append({
-            "Model":       name,
-            "Accuracy":    f"{m['accuracy']:.4f}",
-            "Fake F1":     f"{r['Fake']['f1-score']:.4f}",
-            "Real F1":     f"{r['Real']['f1-score']:.4f}",
-            "Train Time":  f"{m['time']:.1f}s",
+            "Model":      name,
+            "Accuracy":   f"{m['accuracy']:.4f}",
+            "Fake F1":    f"{r['Fake']['f1-score']:.4f}",
+            "Real F1":    f"{r['Real']['f1-score']:.4f}",
+            "Train Time": f"{m['time']:.1f}s",
         })
     st.dataframe(pd.DataFrame(rows).set_index("Model"), use_container_width=True)
 
-    # Detailed classification reports (expandable)
     with st.expander("📋 Detailed Classification Reports"):
-        tabs = st.tabs(list(reports.keys()))
-        for tab, (name, report) in zip(tabs, reports.items()):
+        for tab, (name, report) in zip(st.tabs(list(reports.keys())), reports.items()):
             with tab:
                 report_rows = []
                 for cls in ["Fake", "Real", "macro avg", "weighted avg"]:
@@ -273,104 +228,78 @@ if st.session_state.trained:
                             "F1-Score":  f"{r['f1-score']:.4f}",
                             "Support":   int(r.get("support", 0)),
                         })
-                st.dataframe(
-                    pd.DataFrame(report_rows).set_index("Class"),
-                    use_container_width=True,
-                )
+                st.dataframe(pd.DataFrame(report_rows).set_index("Class"), use_container_width=True)
 
     st.divider()
-
-    # ── Prediction section ─────────────────────────────────────────────────
     st.subheader("🔮 Predict an Article")
+    col_left, col_right = st.columns([3, 2], gap="large")
 
-    col_input, col_result = st.columns([3, 2], gap="large")
-
-    with col_input:
+    with col_left:
         article_text = st.text_area(
-            "Paste a news article or headline below:",
+            "Paste a news article or headline:",
             height=220,
-            placeholder="e.g. 'Scientists discover new treatment for cancer …'",
+            placeholder="e.g. 'Scientists discover new cancer treatment …'",
         )
         chosen_model = st.selectbox(
-            "Choose a model for the main prediction:",
+            "Primary model:",
             options=list(st.session_state.models.keys()),
-            index=0,
         )
         predict_btn = st.button("Analyse Article", type="primary", use_container_width=True)
 
-    with col_result:
+    with col_right:
         if predict_btn:
             if not article_text.strip():
                 st.warning("Please paste some text first.")
             else:
-                vec    = st.session_state.vectorizer
-                models = st.session_state.models
+                vec   = st.session_state.vectorizer
+                mdls  = st.session_state.models
+                xv    = vec.transform([clean_text(article_text)])
+                model = mdls[chosen_model]
+                pred  = model.predict(xv)[0]
 
-                cleaned = clean_text(article_text)
-                xv      = vec.transform([cleaned])
-                model   = models[chosen_model]
-                pred    = model.predict(xv)[0]
+                is_fake   = pred == 0
+                css_cls   = "result-fake" if is_fake else "result-real"
+                icon      = "🔴" if is_fake else "🟢"
+                verdict   = "FAKE NEWS" if is_fake else "REAL NEWS"
+                conf_html = ""
 
-                is_fake  = pred == 0
-                css_cls  = "result-fake" if is_fake else "result-real"
-                icon     = "🔴" if is_fake else "🟢"
-                verdict  = "FAKE NEWS" if is_fake else "REAL NEWS"
-
-                # Confidence
-                conf_pct = None
                 if hasattr(model, "predict_proba"):
-                    proba    = model.predict_proba(xv)[0]
-                    conf_pct = proba[pred] * 100
+                    proba     = model.predict_proba(xv)[0]
+                    conf_pct  = proba[pred] * 100
                     bar_color = "#ef4444" if is_fake else "#22c55e"
                     conf_html = (
                         f'<div class="conf-bar-bg">'
-                        f'<div class="conf-bar-fill" '
-                        f'style="width:{conf_pct:.1f}%;background:{bar_color}"></div>'
+                        f'<div class="conf-bar-fill" style="width:{conf_pct:.1f}%;background:{bar_color}"></div>'
                         f'</div>'
-                        f'<p style="margin:4px 0 0;font-size:0.85rem;color:#6b7280">'
-                        f'Confidence: {conf_pct:.1f}%</p>'
+                        f'<p style="margin:4px 0 0;font-size:0.85rem;color:#6b7280">Confidence: {conf_pct:.1f}%</p>'
                     )
-                else:
-                    conf_html = ""
 
                 st.markdown(
                     f'<div class="{css_cls}">'
                     f'<p class="result-title">{icon} {verdict}</p>'
                     f'<p style="margin:4px 0;font-size:0.85rem;color:#6b7280">via {chosen_model}</p>'
-                    f'{conf_html}'
-                    f'</div>',
+                    f'{conf_html}</div>',
                     unsafe_allow_html=True,
                 )
 
-                # All-models comparison
-                st.markdown("**All models agree?**")
+                st.markdown("**All models:**")
                 agree_rows = []
-                for name, m in models.items():
-                    p = m.predict(xv)[0]
+                for name, m in mdls.items():
+                    p   = m.predict(xv)[0]
                     row = {"Model": name, "Verdict": "🔴 Fake" if p == 0 else "🟢 Real"}
                     if hasattr(m, "predict_proba"):
                         pr = m.predict_proba(xv)[0]
                         row["Confidence"] = f"{pr[p]*100:.1f}%"
                     agree_rows.append(row)
-
-                st.dataframe(
-                    pd.DataFrame(agree_rows).set_index("Model"),
-                    use_container_width=True,
-                )
+                st.dataframe(pd.DataFrame(agree_rows).set_index("Model"), use_container_width=True)
         else:
             st.info("Enter an article and click **Analyse Article** to see predictions.")
 
 else:
-    # Not yet trained — show instructions
-    st.info(
-        "👈 Configure your dataset paths in the sidebar, then click **Train Models** to get started.\n\n"
-        "**Expected CSV columns:** `title`, `text`, `subject`, `date`\n\n"
-        "Alternatively, upload your `True.csv` and `Fake.csv` files directly."
-    )
+    st.info("👈 Click **Train Models** in the sidebar to get started.")
     st.markdown("""
     ### How it works
-    1. **Upload / point to** your `True.csv` and `Fake.csv` files
-    2. **Click Train Models** — the app cleans text, fits a TF-IDF vectorizer, and trains 4 classifiers
-    3. **Review** accuracy metrics and detailed classification reports
-    4. **Paste any article** to get real-time predictions from all models
+    1. Click **Train Models** — loads your CSVs, cleans text, trains 4 ML classifiers
+    2. Review accuracy metrics and F1 scores per model
+    3. Paste any article or headline to get instant predictions from all models
     """)
