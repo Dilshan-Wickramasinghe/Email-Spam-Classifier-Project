@@ -167,5 +167,5 @@ This project is open source under the [MIT License](LICENSE).
 **Dilshan Wickramasinghe**
 AI Engineer Intern · LLMs · RAG · NLP · MLOps
 
-[![LinkedIn](https://img.shields.io/badge/LinkedIn-Connect-blue?logo=linkedin)](https://linkedin.com/in/your-profile)
-[![GitHub](https://img.shields.io/badge/GitHub-Follow-black?logo=github)](https://github.com/your-username)
+[![LinkedIn](https://img.shields.io/badge/LinkedIn-Connect-blue?logo=linkedin)](https://www.linkedin.com/in/dilshan-wickramasinghedev/)
+[![GitHub](https://img.shields.io/badge/GitHub-Follow-black?logo=github)](https://github.com/Dilshan-Wickramasinghe)
