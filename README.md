@@ -1,4 +1,4 @@
-#Fake-News-Detection-using-Machine-Learning
+Fake-News-Detection-using-Machine-Learning
 
 An end-to-end machine learning system that classifies news articles as **real or fake** using NLP and classical ML classifiers. Trained on 44,898 labelled articles and deployed as an interactive **Streamlit web app** with real-time predictions and model comparison dashboards.
 
@@ -14,7 +14,7 @@ An end-to-end machine learning system that classifies news articles as **real or
 
 ##  Features
 
-- **Text preprocessing pipeline** — lowercasing, URL/HTML stripping, punctuation and digit removal, whitespace normalisation
+- **Text preprocessing pipeline** : lowercasing, URL/HTML stripping, punctuation and digit removal, whitespace normalisation
 - **TF-IDF vectorisation** with 50,000-feature optimised vocabulary and sublinear term-frequency scaling
 - **4 ML classifiers** trained and benchmarked side by side:
   - Logistic Regression
@@ -22,9 +22,9 @@ An end-to-end machine learning system that classifies news articles as **real or
   - Random Forest
   - Gradient Boosting
 - **Stratified train/test split** (70/30) for balanced class evaluation
-- **Full classification reports** — precision, recall, and F1-score per class per model
+- **Full classification reports** : precision, recall, and F1-score per class per model
 - **Streamlit web app** with real-time article prediction, per-model confidence scores, and an interactive metrics dashboard
-- **File upload support** — drag and drop your own CSVs directly in the sidebar
+- **File upload support** : drag and drop your own CSVs directly in the sidebar
 
 ---
 
