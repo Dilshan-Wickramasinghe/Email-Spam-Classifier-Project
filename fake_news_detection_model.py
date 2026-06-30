@@ -132,7 +132,7 @@ def main():
                 xv = vectorizer.transform([clean_text(article)])
                 for name, m in fitted_models.items():
                     pred = m.predict(xv)[0]
-                    label = "🔴 FAKE" if pred == 0 else "🟢 REAL"
+                    label = " FAKE" if pred == 0 else " REAL"
                     print(f"  {name:<25} → {label}")
 
 if __name__ == "__main__":
